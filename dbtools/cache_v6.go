@@ -1,10 +1,12 @@
 package dbtools
 
 import (
+	"log"
+
 	"github.com/sjlleo/nexttrace-backend/ipgeo"
 )
 
-type Cache struct {
+type Cache_v6 struct {
 	Id       uint
 	Uid      uint
 	Ip       string
@@ -18,25 +20,17 @@ type Cache struct {
 	Isp      string
 }
 
-func ShowAllCities() *[]Cache {
+func SearchIPv6(ip string) (*Cache_v6, error) {
 	db := GetDB()
-	c := []Cache{}
-	db.Model(&Cache{}).Distinct("country", "prov", "city").Find(&c)
-	return &c
-}
-
-func SearchIP(ip string) (*Cache, error) {
-	db := GetDB()
-	c := Cache{}
-
-	res := db.Where("INET_ATON(?) & ~(pow(2,32-prefix)-1) = INET_ATON(ip) & ~(pow(2,32-prefix)-1)", ip).Order("prefix desc").Take(&c)
+	c := Cache_v6{}
+	res := db.Where("INET6_ATON(?) >> (128-prefix) = INET6_ATON(ip) >> (128-prefix)", ip).Order("prefix desc").Take(&c)
 	return &c, res.Error
 }
 
-func UpdateIP(ip string, prefix int, asnumber string, country string, prov string, city string, district string) error {
+func UpdateIPv6(ip string, prefix int, asnumber string, country string, prov string, city string, district string) error {
 	db := GetDB()
-	c, _ := SearchIP(ip)
-	// 如果找不到
+	c, _ := SearchIPv6(ip)
+	log.Println(c)
 	if c.Country == "" {
 		c.Ip = ip
 		c.Asnumber = asnumber
@@ -48,27 +42,27 @@ func UpdateIP(ip string, prefix int, asnumber string, country string, prov strin
 		err := db.Create(&c).Error
 		return err
 	}
-	res := db.Model(&c).Updates(Cache{
+
+	res := db.Model(&c).Updates(Cache_v6{
 		Prefix:   prefix,
 		Asnumber: asnumber,
 		Country:  country,
 		Prov:     prov,
 		City:     city,
-		District: district,
 	})
 	return res.Error
 }
 
-func AddIP(data *ipgeo.IPGeoData, uid int) error {
-	prefix := 32
+func AddIPv6(data *ipgeo.IPGeoData, uid int) error {
+	prefix := 128
 
 	if data.District != "" {
-		prefix = 24
+		prefix = 64
 	}
 
 	db := GetDB()
 
-	c := Cache{
+	c := Cache_v6{
 		Ip:       data.IP,
 		Uid:      uint(uid),
 		Prefix:   prefix,

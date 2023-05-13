@@ -1,7 +1,7 @@
 package ipgeo
 
 import (
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -10,7 +10,7 @@ import (
 )
 
 func IPInsight(ip string) (*IPGeoData, string, error) {
-	url := "https://ipinsight.io/query?ip=" + ip
+	url := "https://api.ipinsight.io/ip/" + ip + "?token=" + IPInsightToken
 
 	client := &http.Client{
 		// 2 秒超时
@@ -27,7 +27,7 @@ func IPInsight(ip string) (*IPGeoData, string, error) {
 		return &IPGeoData{}, "", err
 	}
 
-	body, _ := ioutil.ReadAll(content.Body)
+	body, _ := io.ReadAll(content.Body)
 	res := gjson.ParseBytes(body)
 
 	var country string

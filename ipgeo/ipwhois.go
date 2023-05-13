@@ -1,7 +1,7 @@
 package ipgeo
 
 import (
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -27,13 +27,13 @@ func ipwhois(ip string) (*IPGeoData, error) {
 		return &IPGeoData{}, err
 	}
 
-	body, _ := ioutil.ReadAll(content.Body)
+	body, _ := io.ReadAll(content.Body)
 	res := gjson.ParseBytes(body)
 
 	return &IPGeoData{
 		IP:       ip,
 		Asnumber: res.Get("connection").Get("asn").String(),
-		Country:  res.Get("region").String(),
+		Country:  res.Get("country").String(),
 		City:     res.Get("city").String(),
 		Prov:     res.Get("region").String(),
 		Owner:    res.Get("connection").Get("org").String(),

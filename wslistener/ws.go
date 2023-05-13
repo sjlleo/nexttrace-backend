@@ -3,70 +3,85 @@ package wslistener
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/sjlleo/nexttrace-backend/dbtools"
 	"github.com/sjlleo/nexttrace-backend/ipgeo"
-	"golang.org/x/sync/semaphore"
+	"github.com/sjlleo/nexttrace-backend/service"
 )
 
-var upgrader = websocket.Upgrader{} // use default options
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+} // use default options
 
 type WsConn struct {
 	Conn *websocket.Conn
 	Mux  sync.Mutex
 }
 
-func getASNData(res *ipgeo.IPGeoData) {
-	asnData, err := dbtools.SearchASNData(res.Asnumber)
-	// 如果 ASN 不存在
-	if asnData.Asn == 0 || err != nil {
-		d := ipgeo.GetIPASNDomain(res.IP)
-		log.Println(d)
-		res.Domain = d.Domain
-		// 添加到数据库里面
-		dbtools.AddASNData(d)
-	} else {
-		// 存在的话直接放入
-		res.Domain = asnData.Domain
+// func getIPSense(res *ipgeo.IPGeoData) {
+// 	var aiwenScene string
+// 	if ipgeo.HasLocalIPAddr(res.IP) {
+// 		return
+// 	}
+// 	r, err := dbtools.SearchIPScense(res.IP)
+// 	if err != nil || r.Scense == "" {
+// 		// aiwenScene, _ = ipgeo.AiwenTechScense(res.IP)
+// 		// dbtools.AddIPScense(res, aiwenScene)
+// 	} else {
+// 		aiwenScene = r.Scense
+// 	}
+// 	res.Domain = aiwenScene
+// }
+
+func ParseIP(s string) (net.IP, int) {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return nil, 0
 	}
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '.':
+			return ip, 4
+		case ':':
+			return ip, 6
+		}
+	}
+	return nil, 0
 }
 
 func getIPData(mt int, wsconn *WsConn, message []byte, uid int) {
 	// 定义返回的数据结构
+	var res []byte
 	var reply *ipgeo.IPGeoData
-	ip := string(message)
-	// DB 处理
-	cache, err := dbtools.SearchIP(ip)
-	// DB 没有数据
-	if err != nil {
-		// 向 IP API 请求数据
-		reply = ipgeo.GetIPGeoData(ip)
-		log.Println(reply)
-		// 向 DB 写入经过整合后的数据
-		err := dbtools.AddIP(reply, uid)
+	var searchMode bool = false
+	var err error
+	msg := string(message)
+	switch {
+	case msg == "ping":
+		// 保活应答
+		res = []byte("pong")
+	case strings.HasPrefix(msg, "FindNeiborHop"):
+		msgSlice := strings.Split(msg, "|")
+		if msgSlice[1] != "" {
+			str, _ := dbtools.FindNeiborHop(msgSlice[1])
+			res = []byte(str)
+		} else {
+			res = []byte(`{"error": {"message": "IPAddr cannot be empty"}}`)
+		}
 
-		if err != nil {
-			log.Println(err)
-		}
-	} else {
-		// 数据库已有记录，将 cache 和 ipv4_asn 整合为 IPGeoData
-		reply = &ipgeo.IPGeoData{
-			IP:       ip,
-			Asnumber: cache.Asnumber,
-			Country:  cache.Country,
-			Prov:     cache.Prov,
-			City:     cache.City,
-			District: cache.District,
-			Owner:    cache.Owner,
-			Isp:      cache.Isp,
-		}
+	default:
+		searchMode = true
+		reply = service.GetIPGeoData(msg, uid)
+		res, _ = json.Marshal(reply)
 	}
-	getASNData(reply)
-	res, _ := json.Marshal(reply)
 	// 返回流
 	wsconn.Mux.Lock()
 	// websocket.Conn 不支持多协程同时向一个链接写数据，需要互斥锁保护，否则在高并发的请求下容易触发 panic
@@ -78,6 +93,9 @@ func getIPData(mt int, wsconn *WsConn, message []byte, uid int) {
 		log.Println("write:", err)
 	}
 	wsconn.Conn.SetWriteDeadline(time.Time{})
+	if searchMode {
+		service.CheckNewUpdate(reply)
+	}
 }
 
 func getIPAdress(r *http.Request) string {
@@ -127,9 +145,6 @@ func Response(w http.ResponseWriter, r *http.Request) {
 		}
 		// 处理部分
 
-		// 信号量设定，控制每个连接的总子协程数不高于20个，防止过多请求涌入导致服务器资源耗尽
-		semaphore.NewWeighted(20)
-		// 开启子协程处理 IP 地理位置数据
 		go getIPData(mt, &wsconn, message, uid)
 	}
 }
